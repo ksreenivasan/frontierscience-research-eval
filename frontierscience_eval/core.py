@@ -158,9 +158,12 @@ def http_json(
 
 def parse_verdict(text: str) -> float:
     matches = re.findall(r"(?im)^\s*VERDICT:\s*([0-9]+(?:\.[0-9]+)?)\s*$", text)
-    if not matches:
-        raise ValueError("judge output has no parseable final VERDICT line")
-    score = float(matches[-1])
+    if matches:
+        score = float(matches[-1])
+    elif re.fullmatch(r"\s*[0-9]+(?:\.[0-9]+)?\s*", text):
+        score = float(text.strip())
+    else:
+        raise ValueError("judge output has no parseable VERDICT or bare numeric score")
     if not math.isfinite(score) or not 0 <= score <= 10:
         raise ValueError(f"judge score outside [0, 10]: {score}")
     return score

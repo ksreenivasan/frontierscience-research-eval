@@ -38,6 +38,7 @@ class CoreTests(unittest.TestCase):
     def test_verdict_parser(self):
         self.assertEqual(parse_verdict("reason\nVERDICT: 7.5"), 7.5)
         self.assertEqual(parse_verdict("VERDICT: 2\nwork\nVERDICT: 8"), 8.0)
+        self.assertEqual(parse_verdict("0"), 0.0)
         for bad in ["VERDICT: 11", "score 7", "VERDICT: -1"]:
             with self.assertRaises(ValueError):
                 parse_verdict(bad)
