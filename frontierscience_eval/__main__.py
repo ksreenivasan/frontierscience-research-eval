@@ -158,12 +158,18 @@ def command_generate(args: argparse.Namespace) -> int:
             print(f"generate {model['label']} {sample['sample_id'][:12]}", flush=True)
             try:
                 result = call_model(model, sample["problem"])
-                if not result["text"]:
-                    raise ValueError("provider returned an empty visible answer")
                 elapsed = time.monotonic() - started
-                raw_path = run_dir / "raw" / f"generation-{sample['sample_id'][:12]}-{model['label']}.json"
+                raw_suffix = sha256_bytes(str(result.get("response_id") or utc_now()).encode())[:12]
+                raw_path = run_dir / "raw" / (
+                    f"generation-{sample['sample_id'][:12]}-{model['label']}-{raw_suffix}.json"
+                )
                 raw_path.parent.mkdir(parents=True, exist_ok=True)
                 raw_path.write_text(json.dumps(result.pop("raw"), ensure_ascii=False, indent=2))
+                if not result["text"]:
+                    raise ValueError(
+                        "provider returned an empty visible answer "
+                        f"(finish_reason={result['finish_reason']}, usage={result['usage']})"
+                    )
                 record = {
                     "answer_id": sha256_bytes("\0".join([sample["sample_id"], model["label"], "0"]).encode()),
                     "sample_id": sample["sample_id"],
