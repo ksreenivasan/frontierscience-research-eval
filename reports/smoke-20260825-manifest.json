@@ -1,0 +1,145 @@
+{
+  "authoritative_answer_count": 4,
+  "authoritative_judgment_count": 4,
+  "condition_id": "frontierscience-research-direct-v0",
+  "created_at": "2026-08-25T05:22:36.239327+00:00",
+  "dataset": {
+    "repository": "openai/frontierscience",
+    "revision": "25ed67db7da8f4591484e764008ff585544f5a30",
+    "sha256": "96c0434abfcbadd6ef6f59a03cc374be4caf9c1f2d5e62d8fe921e768f66aa46",
+    "track": "research"
+  },
+  "judge": {
+    "label": "gpt-5-judge",
+    "model_id": "gpt-5-2025-08-07",
+    "pass_threshold": 7.0,
+    "prompt_sha256": "3131927d403e9372b26f647fa582ddc5f3f162731dade4e8da0c2ebfb6585b55",
+    "provider": "openai",
+    "settings": {
+      "browsing": false,
+      "code_execution": false,
+      "effective_payload": {
+        "max_output_tokens": 32768,
+        "model": "gpt-5-2025-08-07",
+        "reasoning": {
+          "effort": "high"
+        },
+        "store": false
+      },
+      "requested_reasoning": "high",
+      "tools": false
+    }
+  },
+  "models": [
+    {
+      "label": "gpt-5.6-sol",
+      "model_id": "gpt-5.6-sol",
+      "provider": "openai",
+      "settings": {
+        "browsing": false,
+        "code_execution": false,
+        "effective_payload": {
+          "max_output_tokens": 32768,
+          "model": "gpt-5.6-sol",
+          "reasoning": {
+            "effort": "high"
+          },
+          "store": false
+        },
+        "requested_reasoning": "high",
+        "tools": false
+      }
+    },
+    {
+      "label": "claude-opus-5",
+      "model_id": "claude-opus-5",
+      "provider": "anthropic",
+      "settings": {
+        "browsing": false,
+        "code_execution": false,
+        "effective_payload": {
+          "max_tokens": 32768,
+          "model": "claude-opus-5",
+          "output_config": {
+            "effort": "high"
+          },
+          "thinking": {
+            "type": "adaptive"
+          }
+        },
+        "requested_reasoning": "high",
+        "tools": false
+      }
+    },
+    {
+      "label": "gemini-3.7-flash",
+      "model_id": "gemini-3.7-flash",
+      "provider": "gemini",
+      "settings": {
+        "browsing": false,
+        "code_execution": false,
+        "effective_payload": {
+          "generationConfig": {
+            "maxOutputTokens": 32768,
+            "thinkingConfig": {
+              "thinkingLevel": "HIGH"
+            }
+          }
+        },
+        "requested_reasoning": "high",
+        "tools": false
+      }
+    },
+    {
+      "label": "qwen3.5-397b-a17b",
+      "model_id": "qwen/qwen3.5-397b-a17b",
+      "provider": "openrouter",
+      "settings": {
+        "browsing": false,
+        "code_execution": false,
+        "effective_payload": {
+          "max_tokens": 32768,
+          "model": "qwen/qwen3.5-397b-a17b",
+          "provider": {
+            "allow_fallbacks": false,
+            "only": [
+              "alibaba"
+            ],
+            "require_parameters": true
+          },
+          "reasoning": {
+            "enabled": true,
+            "exclude": true
+          },
+          "temperature": 0.6,
+          "top_k": 20,
+          "top_p": 0.95
+        },
+        "requested_reasoning": "high",
+        "tools": false
+      }
+    }
+  ],
+  "official_30_trial_equivalent": false,
+  "report_scope": "sanitized smoke manifest; raw prompts, answers, rubrics, and provider responses omitted",
+  "runner_commits": [
+    "b193b0c",
+    "8859ce2",
+    "2eea831",
+    "a6e696c",
+    "26cd26c"
+  ],
+  "sample_ids": [
+    "cb64e023ff7ade961aae4dc1b5723209b2c7cabf6bd806e0ed90af2f6436eeec"
+  ],
+  "scaffold": {
+    "browsing": false,
+    "code_execution": false,
+    "search_agent": false,
+    "single_turn": true,
+    "tools": false
+  },
+  "smoke_only": true,
+  "subset": "smoke",
+  "trial_count": 1
+}
