@@ -232,11 +232,12 @@ def command_grade(args: argparse.Namespace) -> int:
         started = time.monotonic()
         try:
             result = call_model(judge, prompt)
-            score = parse_verdict(result["text"])
             elapsed = time.monotonic() - started
-            raw_path = run_dir / "raw" / f"judge-{answer['answer_id'][:16]}.json"
+            raw_suffix = sha256_bytes(str(result.get("response_id") or utc_now()).encode())[:12]
+            raw_path = run_dir / "raw" / f"judge-{answer['answer_id'][:16]}-{raw_suffix}.json"
             raw_path.parent.mkdir(parents=True, exist_ok=True)
             raw_path.write_text(json.dumps(result.pop("raw"), ensure_ascii=False, indent=2))
+            score = parse_verdict(result["text"])
             append_jsonl(
                 judgments_path,
                 {
