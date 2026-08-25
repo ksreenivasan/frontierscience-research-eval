@@ -73,6 +73,10 @@ After answer generation, the judge receives one user message containing:
 
 The local template is semantically equivalent but not byte-identical to the PDF typography: it corrects the paper's `attemped` typo and normalizes whitespace. This is the template used for the smoke/pilot and is retained for condition continuity. The configured judge is `gpt-5-2025-08-07` at high reasoning with a 32,768-token output cap and no tools. One judge call scores each answer. The parser accepts the requested final `VERDICT: <points>` form or an otherwise unambiguous response consisting only of a number. Scores must be finite and in `[0,10]`; API and parse failures are not converted to zero. The primary metric is the mean of per-answer `score >= 7` indicators, not a threshold applied after averaging rubric points.
 
+`gpt-5-2025-08-07` is the pinned primary adjudication condition. Alternative judge models may be run against frozen answer artifacts to measure judge dependence, but must use separate condition IDs and record exact model/provider, reasoning settings, output cap, prompt hash, parser, threshold, retry policy, timestamp, and answer IDs. Alternative scores must be compared with the primary judge and never silently substituted, pooled, averaged, or voted into the primary result.
+
+For a small sensitivity check, predeclare 12–24 existing answers balanced across target models and subjects, with coverage across primary-score bands below 5, 5 to below 7, and at/above 7. Regrade each frozen answer once per alternative judge. Report mean absolute point difference, pass/fail disagreement, a 2×2 pass confusion table, and threshold-adjacent disagreements overall and by target model. Expert review may adjudicate disagreements as a separate analysis; it must not rewrite the pinned primary artifacts. No generalized multi-judge framework is required.
+
 ### Isolation and resources
 
 The reusable image is a small `python:3.12-slim` standard-library runner, executing as numeric user `65534`. The runbook applies the controls at `docker run` time:
