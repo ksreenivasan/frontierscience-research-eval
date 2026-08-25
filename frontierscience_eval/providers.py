@@ -122,6 +122,7 @@ def call_model(model: dict[str, Any], prompt: str) -> dict[str, Any]:
         headers.update({"x-api-key": key, "anthropic-version": "2023-06-01"})
         response = http_json("https://api.anthropic.com/v1/messages", "POST", headers, payload)
         usage = response.get("usage", {})
+        output_details = usage.get("output_tokens_details", {}) or {}
         return {
             "text": _anthropic_text(response),
             "resolved_model": response.get("model"),
@@ -130,7 +131,7 @@ def call_model(model: dict[str, Any], prompt: str) -> dict[str, Any]:
             "usage": {
                 "input_tokens": usage.get("input_tokens", 0),
                 "output_tokens": usage.get("output_tokens", 0),
-                "reasoning_tokens": usage.get("thinking_tokens", 0),
+                "reasoning_tokens": output_details.get("thinking_tokens", 0),
                 "cache_read_tokens": usage.get("cache_read_input_tokens", 0),
             },
             "response_id": response.get("id"),
