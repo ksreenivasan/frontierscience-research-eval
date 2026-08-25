@@ -1,8 +1,8 @@
 # FrontierScience-Research bounded evaluation
 
-Minimal direct single-turn runner for the pinned public FrontierScience-Research gold set. It implements the approved one-question smoke and deterministic 9-question pilot only. It has no tools, browser, code execution, agent loop, or evaluation framework.
+Minimal direct single-turn runner for the pinned public FrontierScience-Research gold set. It has no tools, browser, code execution, agent loop, or evaluation framework. The one-question smoke and deterministic 9-question pilot are complete; full-set/multi-trial support is prepared but has not been launched.
 
-See [`PLAN.md`](PLAN.md) for protocol and comparability limits.
+See [`PLAN.md`](PLAN.md) for the bounded campaign and [`FULL_RUNBOOK.md`](FULL_RUNBOOK.md) for the canonical environment audit, offline full-run plan, estimates, and required pre-launch decision.
 
 ## Offline checks
 

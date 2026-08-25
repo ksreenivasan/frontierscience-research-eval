@@ -105,10 +105,29 @@ def validate_dataset(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def select_subset(rows: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
-    by_group = {row["task_group_id"]: (index, row) for index, row in enumerate(rows)}
-    groups = [SMOKE_GROUP] if name == "smoke" else list(PILOT_GROUPS)
+    if name == "research-full":
+        hashes = [content_hash(row) for row in rows]
+        counts = Counter(hashes)
+        output = []
+        for source_row, (row, base_id) in enumerate(zip(rows, hashes)):
+            sample_id = base_id if counts[base_id] == 1 else f"{base_id}-row{source_row:02d}"
+            output.append(
+                {
+                    "sample_id": sample_id,
+                    "source_row": source_row,
+                    "task_group_id": row["task_group_id"],
+                    "subject": row["subject"],
+                    "stratum": "full",
+                    "problem": row["problem"],
+                    "rubric": row["answer"],
+                }
+            )
+        return output
+
     if name not in {"smoke", "research-pilot-v1"}:
         raise ValueError(f"unknown subset: {name}")
+    by_group = {row["task_group_id"]: (index, row) for index, row in enumerate(rows)}
+    groups = [SMOKE_GROUP] if name == "smoke" else list(PILOT_GROUPS)
     output = []
     for group in groups:
         expected_subject, stratum, expected_row = PILOT_GROUPS[group]
