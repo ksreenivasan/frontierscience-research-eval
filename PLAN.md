@@ -280,7 +280,11 @@ docker run --rm --name frontierscience-eval-tests --read-only --network none \
   frontierscience-eval:dev python -m unittest discover -s tests -v
 
 docker run --rm --name frontierscience-eval-catalog --read-only --network bridge \
-  --env-file .env.catalog frontierscience-eval:dev \
+  -v "$HOME/secrets_and_keys/openai.key:/run/secrets/openai:ro" \
+  -v "$HOME/secrets_and_keys/anthropic.key:/run/secrets/anthropic:ro" \
+  -v "$HOME/secrets_and_keys/gemini.key:/run/secrets/gemini:ro" \
+  -v "$HOME/secrets_and_keys/openrouter.key:/run/secrets/openrouter:ro" \
+  frontierscience-eval:dev \
   python -m frontierscience_eval catalog --config configs/direct-pilot.json --no-inference
 ```
 
@@ -298,13 +302,18 @@ Commit the offline scaffold and correctness checks locally before inference.
 
 ```bash
 docker run --rm --name frontierscience-eval-smoke-generate --read-only --network bridge \
-  --env-file .env.run -v "$PWD/data:/work/data:ro" \
+  -v "$HOME/secrets_and_keys/openai.key:/run/secrets/openai:ro" \
+  -v "$HOME/secrets_and_keys/anthropic.key:/run/secrets/anthropic:ro" \
+  -v "$HOME/secrets_and_keys/gemini.key:/run/secrets/gemini:ro" \
+  -v "$HOME/secrets_and_keys/openrouter.key:/run/secrets/openrouter:ro" \
+  -v "$PWD/data:/work/data:ro" \
   -v "$PWD/artifacts/smoke:/work/artifacts" frontierscience-eval:dev \
   python -m frontierscience_eval generate \
     --config configs/direct-smoke.json --subset smoke --trials 1
 
 docker run --rm --name frontierscience-eval-smoke-judge --read-only --network bridge \
-  --env-file .env.judge -v "$PWD/data:/work/data:ro" \
+  -v "$HOME/secrets_and_keys/openai.key:/run/secrets/openai:ro" \
+  -v "$PWD/data:/work/data:ro" \
   -v "$PWD/artifacts/smoke:/work/artifacts" frontierscience-eval:dev \
   python -m frontierscience_eval grade --resume --run-id <smoke-run-id>
 
@@ -319,14 +328,19 @@ Stop after smoke for a narrow artifact and judge review. Fix only issues needed 
 
 ```bash
 docker run --rm --name frontierscience-eval-pilot-generate --read-only --network bridge \
-  --env-file .env.run -v "$PWD/data:/work/data:ro" \
+  -v "$HOME/secrets_and_keys/openai.key:/run/secrets/openai:ro" \
+  -v "$HOME/secrets_and_keys/anthropic.key:/run/secrets/anthropic:ro" \
+  -v "$HOME/secrets_and_keys/gemini.key:/run/secrets/gemini:ro" \
+  -v "$HOME/secrets_and_keys/openrouter.key:/run/secrets/openrouter:ro" \
+  -v "$PWD/data:/work/data:ro" \
   -v "$PWD/artifacts/pilot:/work/artifacts" frontierscience-eval:dev \
   python -m frontierscience_eval generate \
     --config configs/direct-pilot.json --subset research-pilot-v1 \
     --trials 1 --resume-from <smoke-run-id>
 
 docker run --rm --name frontierscience-eval-pilot-judge --read-only --network bridge \
-  --env-file .env.judge -v "$PWD/data:/work/data:ro" \
+  -v "$HOME/secrets_and_keys/openai.key:/run/secrets/openai:ro" \
+  -v "$PWD/data:/work/data:ro" \
   -v "$PWD/artifacts/pilot:/work/artifacts" frontierscience-eval:dev \
   python -m frontierscience_eval grade --resume --run-id <pilot-run-id>
 docker run --rm --name frontierscience-eval-pilot-report --read-only --network none \

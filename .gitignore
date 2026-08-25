@@ -1,0 +1,16 @@
+# Provider credentials and local environment
+.env*
+*.key
+
+# Public benchmark data is fetched/pinned locally, not committed
+data/
+
+# Raw model and judge artifacts stay outside Git
+artifacts/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Local reports are copied selectively into reports/
+.DS_Store

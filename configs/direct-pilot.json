@@ -1,0 +1,47 @@
+{
+  "condition_id": "frontierscience-research-direct-v0",
+  "models": [
+    {
+      "label": "gpt-5.6-sol",
+      "provider": "openai",
+      "model_id": "gpt-5.6-sol",
+      "key_file": "/run/secrets/openai",
+      "max_output_tokens": 32768,
+      "price_per_million": {"input": 4.0, "output": 20.0}
+    },
+    {
+      "label": "claude-opus-5",
+      "provider": "anthropic",
+      "model_id": "claude-opus-5",
+      "key_file": "/run/secrets/anthropic",
+      "max_output_tokens": 32768,
+      "price_per_million": {"input": 5.0, "output": 25.0}
+    },
+    {
+      "label": "gemini-3.7-flash",
+      "provider": "gemini",
+      "model_id": "gemini-3.7-flash",
+      "key_file": "/run/secrets/gemini",
+      "max_output_tokens": 32768,
+      "price_per_million": {"input": 0.75, "output": 3.75}
+    },
+    {
+      "label": "qwen3.5-397b-a17b",
+      "provider": "openrouter",
+      "model_id": "qwen/qwen3.5-397b-a17b",
+      "endpoint": "alibaba",
+      "key_file": "/run/secrets/openrouter",
+      "max_output_tokens": 32768,
+      "price_per_million": {"input": 0.39, "output": 2.34},
+      "fallback_model_ids": ["z-ai/glm-5.1", "nvidia/nemotron-3-ultra-550b-a55b"]
+    }
+  ],
+  "judge": {
+    "label": "gpt-5-judge",
+    "provider": "openai",
+    "model_id": "gpt-5-2025-08-07",
+    "key_file": "/run/secrets/openai",
+    "max_output_tokens": 32768,
+    "price_per_million": {"input": 1.25, "output": 10.0}
+  }
+}
