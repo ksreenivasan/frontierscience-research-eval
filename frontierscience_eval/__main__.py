@@ -165,8 +165,10 @@ def command_generate(args: argparse.Namespace) -> int:
                 )
                 raw_path.parent.mkdir(parents=True, exist_ok=True)
                 raw_path.write_text(json.dumps(result.pop("raw"), ensure_ascii=False, indent=2))
-                refusal = str(result["finish_reason"]).lower() == "refusal"
-                if not result["text"] and not refusal:
+                finish_reason = str(result["finish_reason"]).lower()
+                refusal = finish_reason == "refusal"
+                incomplete = not result["text"] and finish_reason in {"max_tokens", "length"}
+                if not result["text"] and not (refusal or incomplete):
                     raise ValueError(
                         "provider returned an empty visible answer "
                         f"(finish_reason={result['finish_reason']}, usage={result['usage']})"
@@ -186,6 +188,7 @@ def command_generate(args: argparse.Namespace) -> int:
                     "answer": result["text"],
                     "finish_reason": result["finish_reason"],
                     "refusal": refusal,
+                    "incomplete": incomplete,
                     "usage": result["usage"],
                     "cost_usd": cost_usd(model, result["usage"]),
                     "latency_seconds": round(elapsed, 3),
