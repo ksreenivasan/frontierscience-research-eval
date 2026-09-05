@@ -57,6 +57,29 @@ The current configuration uses high reasoning/thinking and a 32,768-token output
 
 Provider/scaffold settings are part of the result condition and are recorded in each run manifest.
 
+Gemini 3.8 Flash is supported as exact ID `gemini-3.8-flash`. It requests native `thinkingLevel=HIGH` and sends none of the rejected legacy `temperature`, `top_p`, or `top_k` parameters. Existing older-model payloads are unchanged.
+
+### OpenAI-compatible endpoints
+
+To evaluate an arbitrary OpenAI-compatible or vLLM deployment, add a model entry like:
+
+```json
+{
+  "label": "served-model",
+  "provider": "openai_compatible",
+  "model_id": "exact-served-model-id",
+  "base_url": "https://model-host.example/v1",
+  "key_file": "/run/secrets/served-model",
+  "reasoning_history": "empty",
+  "max_output_tokens": 32768,
+  "price_per_million": {"input": 0.0, "output": 0.0}
+}
+```
+
+`base_url`, exact `model_id`, `key_file`, and `reasoning_history` (`none`, `preserve`, or `empty`) are mandatory. For an unauthenticated vLLM server, the key file must still contain an explicit dummy token. Optional endpoint-specific Chat Completions fields belong in `request_parameters`. Before generation starts, the runner requires the exact served ID in `GET <base_url>/models` and a small successful inference canary. `catalog` also runs an inference canary unless `--no-inference` is explicitly supplied.
+
+Campaign jobs should use a one-model runtime config with an explicit trial count. Every deterministic `(sample_id, model_label, trial)` answer is appended immediately; completed keys are skipped and unresolved keys retried on resume. `request_timeout_seconds` bounds each provider call (default 1,800 seconds), and per-item exceptions are recorded without stopping later items. Summaries keep the full manifest cell count as the score denominator, show scored and unresolved counts separately, and remain incomplete while any generation or judgment is unresolved.
+
 ### Primary judge
 
 The primary adjudication condition is pinned to:

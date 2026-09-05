@@ -25,7 +25,12 @@ from .core import (
     sha256_bytes,
     validate_dataset,
 )
-from .providers import call_model, catalog_check, effective_settings
+from .providers import (
+    call_model,
+    catalog_check,
+    effective_settings,
+    require_endpoint_canary,
+)
 
 
 def utc_now() -> str:
@@ -109,6 +114,14 @@ def command_catalog(args: argparse.Namespace) -> int:
     for model in [*config["models"], config["judge"]]:
         try:
             result = catalog_check(model)
+            if result["available"] and not args.no_inference:
+                probe = call_model(
+                    {**model, "max_output_tokens": int(model.get("canary_max_tokens", 32))},
+                    "Reply with OK.",
+                )
+                if not probe["text"]:
+                    raise RuntimeError("inference canary returned no text")
+                result["inference_canary"] = "passed"
             failed |= not result["available"]
             safe = {key: value for key, value in result.items() if key != "endpoint_metadata"}
             print(f"{model['label']}: {json.dumps(safe, sort_keys=True)}")
@@ -217,6 +230,10 @@ def import_answers(source: Path, destination: Path, allowed: set[tuple[str, str,
 
 def command_generate(args: argparse.Namespace) -> int:
     config = load_config(args.config)
+    for model in config["models"]:
+        canary = require_endpoint_canary(model)
+        if canary:
+            print(f"endpoint canary passed: {model['label']}", flush=True)
     rows = load_dataset(args.data)
     validate_dataset(rows)
     subset = select_subset(rows, args.subset)
@@ -421,11 +438,15 @@ def run_completeness(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("run contains duplicate authoritative judgments")
     if set(judgment_ids) - set(answer_ids):
         raise ValueError("run contains judgments without matching authoritative answers")
+    unresolved_generation = sorted(expected_keys - set(answer_keys))
+    unresolved_judgment = sorted(set(answer_ids) - set(judgment_ids))
     return {
-        "complete": set(answer_keys) == expected_keys and set(judgment_ids) == set(answer_ids),
+        "complete": not unresolved_generation and not unresolved_judgment,
         "expected_cells": len(expected_keys),
         "answer_cells": len(answer_keys),
         "judgment_cells": len(judgment_ids),
+        "unresolved_generation_keys": unresolved_generation,
+        "unresolved_judgment_answer_ids": unresolved_judgment,
     }
 
 
@@ -434,20 +455,40 @@ def build_summary(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
     completeness = run_completeness(run_dir, config)
     answers = [row for row in read_jsonl(run_dir / "answers.jsonl") if row.get("status") == "completed"]
     judgments = [row for row in read_jsonl(run_dir / "judgments.jsonl") if row.get("status") == "completed"]
-    by_model: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    answers_by_model: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    judgments_by_model: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in answers:
+        answers_by_model[row["model_label"]].append(row)
     for row in judgments:
-        by_model[row["model_label"]].append(row)
+        judgments_by_model[row["model_label"]].append(row)
+    expected_per_model = len(read_jsonl(run_dir / "subset.jsonl")) * int(
+        manifest["trial_count"]
+    )
     models = {}
-    for label, rows in sorted(by_model.items()):
+    for model in config["models"]:
+        label = model["label"]
+        model_answers = answers_by_model[label]
+        rows = judgments_by_model[label]
+        judged_ids = {row["answer_id"] for row in rows}
         passed = sum(bool(row["pass"]) for row in rows)
+        unresolved_generation = expected_per_model - len(model_answers)
+        unresolved_judgment = sum(
+            row["answer_id"] not in judged_ids for row in model_answers
+        )
         models[label] = {
-            "n": len(rows),
+            "n": expected_per_model,
+            "scored": len(rows),
             "passed": passed,
-            "pass_rate": passed / len(rows) if rows else None,
-            "mean_rubric_points": sum(row["rubric_points"] for row in rows) / len(rows),
+            "pass_rate": passed / expected_per_model if expected_per_model else None,
+            "mean_rubric_points": (
+                sum(row["rubric_points"] for row in rows) / len(rows) if rows else None
+            ),
+            "unresolved_generation": unresolved_generation,
+            "unresolved_judgment": unresolved_judgment,
+            "unresolved": unresolved_generation + unresolved_judgment,
             "judge_cost_usd": sum(row.get("cost_usd", 0) for row in rows),
             "generation_cost_usd": sum(
-                row.get("cost_usd", 0) for row in answers if row["model_label"] == label
+                row.get("cost_usd", 0) for row in model_answers
             ),
         }
     is_full_protocol = (
@@ -492,13 +533,19 @@ def command_summarize(args: argparse.Namespace) -> int:
             "",
             f"Condition: {summary['condition']}.",
             "",
-            "| Model | Pass | Mean rubric points | Generation cost | Judge cost |",
-            "|---|---:|---:|---:|---:|",
+            "| Model | Pass | Scored | Unresolved | Mean rubric points | Generation cost | Judge cost |",
+            "|---|---:|---:|---:|---:|---:|---:|",
         ]
         for label, row in summary["models"].items():
+            mean = (
+                "n/a"
+                if row["mean_rubric_points"] is None
+                else f"{row['mean_rubric_points']:.2f}/10"
+            )
             lines.append(
-                f"| {label} | {row['passed']}/{row['n']} | {row['mean_rubric_points']:.2f}/10 | "
-                f"${row['generation_cost_usd']:.4f} | ${row['judge_cost_usd']:.4f} |"
+                f"| {label} | {row['passed']}/{row['n']} | {row['scored']}/{row['n']} | "
+                f"{row['unresolved']} | {mean} | ${row['generation_cost_usd']:.4f} | "
+                f"${row['judge_cost_usd']:.4f} |"
             )
         lines.extend(["", f"Total recorded API cost: ${summary['total_recorded_cost_usd']:.4f}.", ""])
         args.report.write_text("\n".join(lines))

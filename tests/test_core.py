@@ -4,7 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from frontierscience_eval.__main__ import command_generate, command_grade, write_manifest
+from frontierscience_eval.__main__ import (
+    command_generate,
+    command_grade,
+    run_completeness,
+    write_manifest,
+)
 
 from frontierscience_eval.core import (
     DATASET_SHA256,
@@ -87,6 +92,18 @@ class CoreTests(unittest.TestCase):
             write_manifest(run, config, "research-full", sample, 30)
             with self.assertRaisesRegex(ValueError, "manifest does not match"):
                 write_manifest(run, config, "research-full", sample, 1)
+
+    def test_unresolved_cells_remain_in_manifest_denominator(self):
+        config = json.loads(Path("configs/direct-full.json").read_text())
+        sample = select_subset(load_dataset(self.data_path), "research-full")[:1]
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            write_manifest(run, config, "research-full", sample, 10)
+            result = run_completeness(run, config)
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["expected_cells"], 40)
+        self.assertEqual(len(result["unresolved_generation_keys"]), 40)
+        self.assertEqual(result["unresolved_judgment_answer_ids"], [])
 
     def test_verdict_parser(self):
         self.assertEqual(parse_verdict("reason\nVERDICT: 7.5"), 7.5)

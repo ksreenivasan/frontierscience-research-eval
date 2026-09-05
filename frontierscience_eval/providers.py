@@ -5,6 +5,17 @@ from typing import Any
 from .core import http_json, read_key
 
 
+def _endpoint_base_url(model: dict[str, Any]) -> str:
+    base_url = model.get("base_url")
+    if not isinstance(base_url, str) or not base_url.strip():
+        raise ValueError("openai_compatible requires an explicit base_url")
+    if model.get("reasoning_history") not in {"none", "preserve", "empty"}:
+        raise ValueError(
+            "openai_compatible reasoning_history must be one of: none, preserve, empty"
+        )
+    return base_url.rstrip("/")
+
+
 def build_payload(provider: str, model: dict[str, Any], prompt: str) -> dict[str, Any]:
     model_id = model["model_id"]
     cap = model["max_output_tokens"]
@@ -47,6 +58,17 @@ def build_payload(provider: str, model: dict[str, Any], prompt: str) -> dict[str
                 "require_parameters": True,
             },
         }
+    if provider == "openai_compatible":
+        _endpoint_base_url(model)
+        payload: dict[str, Any] = dict(model.get("request_parameters") or {})
+        payload.update(
+            {
+                "model": model_id,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": cap,
+            }
+        )
+        return payload
     raise ValueError(f"unsupported provider: {provider}")
 
 
@@ -55,13 +77,26 @@ def effective_settings(provider: str, model: dict[str, Any]) -> dict[str, Any]:
     payload.pop("input", None)
     payload.pop("messages", None)
     payload.pop("contents", None)
-    return {
-        "requested_reasoning": "high",
+    settings = {
+        "requested_reasoning": (
+            model.get("reasoning_effort")
+            if provider == "openai_compatible"
+            else "high"
+        ),
         "effective_payload": payload,
         "tools": False,
         "browsing": False,
         "code_execution": False,
     }
+    if provider == "openai_compatible":
+        settings.update(
+            {
+                "base_url": _endpoint_base_url(model),
+                "key_file": model["key_file"],
+                "reasoning_history": model["reasoning_history"],
+            }
+        )
+    return settings
 
 
 def _openai_text(response: dict[str, Any]) -> str:
@@ -99,10 +134,17 @@ def call_model(model: dict[str, Any], prompt: str) -> dict[str, Any]:
     provider = model["provider"]
     key = read_key(model["key_file"])
     payload = build_payload(provider, model, prompt)
+    timeout = int(model.get("request_timeout_seconds", 1800))
     headers = {"Content-Type": "application/json"}
     if provider == "openai":
         headers["Authorization"] = f"Bearer {key}"
-        response = http_json("https://api.openai.com/v1/responses", "POST", headers, payload)
+        response = http_json(
+            "https://api.openai.com/v1/responses",
+            "POST",
+            headers,
+            payload,
+            timeout=timeout,
+        )
         usage = response.get("usage", {})
         details = usage.get("output_tokens_details", {}) or {}
         return {
@@ -120,7 +162,13 @@ def call_model(model: dict[str, Any], prompt: str) -> dict[str, Any]:
         }
     if provider == "anthropic":
         headers.update({"x-api-key": key, "anthropic-version": "2023-06-01"})
-        response = http_json("https://api.anthropic.com/v1/messages", "POST", headers, payload)
+        response = http_json(
+            "https://api.anthropic.com/v1/messages",
+            "POST",
+            headers,
+            payload,
+            timeout=timeout,
+        )
         usage = response.get("usage", {})
         output_details = usage.get("output_tokens_details", {}) or {}
         return {
@@ -140,7 +188,7 @@ def call_model(model: dict[str, Any], prompt: str) -> dict[str, Any]:
     if provider == "gemini":
         headers["x-goog-api-key"] = key
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model['model_id']}:generateContent"
-        response = http_json(url, "POST", headers, payload)
+        response = http_json(url, "POST", headers, payload, timeout=timeout)
         usage = response.get("usageMetadata", {})
         candidates = response.get("candidates", [])
         return {
@@ -157,16 +205,32 @@ def call_model(model: dict[str, Any], prompt: str) -> dict[str, Any]:
             "response_id": response.get("responseId"),
             "raw": response,
         }
-    if provider == "openrouter":
+    if provider in {"openrouter", "openai_compatible"}:
         headers["Authorization"] = f"Bearer {key}"
-        response = http_json("https://openrouter.ai/api/v1/chat/completions", "POST", headers, payload)
+        url = (
+            "https://openrouter.ai/api/v1/chat/completions"
+            if provider == "openrouter"
+            else f"{_endpoint_base_url(model)}/chat/completions"
+        )
+        response = http_json(url, "POST", headers, payload, timeout=timeout)
         usage = response.get("usage", {})
         details = usage.get("completion_tokens_details", {}) or {}
         choices = response.get("choices", [])
+        message = choices[0].get("message", {}) if choices else {}
+        text = str(
+            message.get("content")
+            or message.get("reasoning_content")
+            or message.get("reasoning")
+            or ""
+        ).strip()
         return {
-            "text": _openrouter_text(response),
+            "text": text,
             "resolved_model": response.get("model"),
-            "provider": response.get("provider") or model.get("endpoint"),
+            "provider": (
+                response.get("provider") or model.get("endpoint")
+                if provider == "openrouter"
+                else model.get("provider_name", "OpenAI-compatible")
+            ),
             "finish_reason": choices[0].get("finish_reason") if choices else None,
             "usage": {
                 "input_tokens": usage.get("prompt_tokens", 0),
@@ -211,4 +275,36 @@ def catalog_check(model: dict[str, Any]) -> dict[str, Any]:
             "endpoint": model["endpoint"],
             "endpoint_metadata": selected[0] if selected else None,
         }
+    if provider == "openai_compatible":
+        data = http_json(
+            f"{_endpoint_base_url(model)}/models",
+            headers={"Authorization": f"Bearer {key}"},
+        )
+        ids = {item.get("id") for item in data.get("data", [])}
+        return {
+            "available": model["model_id"] in ids,
+            "resolved": model["model_id"] if model["model_id"] in ids else None,
+        }
     raise ValueError(f"unsupported provider: {provider}")
+
+
+def require_endpoint_canary(model: dict[str, Any]) -> dict[str, Any] | None:
+    if model["provider"] != "openai_compatible":
+        return None
+    catalog = catalog_check(model)
+    if not catalog["available"]:
+        raise RuntimeError(
+            f"served model {model['model_id']!r} is absent from the endpoint model catalog"
+        )
+    probe = call_model(
+        {**model, "max_output_tokens": int(model.get("canary_max_tokens", 32))},
+        "Reply with OK.",
+    )
+    if not probe["text"]:
+        raise RuntimeError("endpoint inference canary returned no text")
+    return {
+        "model_id": model["model_id"],
+        "catalog": "passed",
+        "inference": "passed",
+        "resolved_model": probe.get("resolved_model"),
+    }

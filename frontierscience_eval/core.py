@@ -172,6 +172,10 @@ def http_json(
             return json.load(response)
     except urllib.error.HTTPError as exc:
         detail = exc.read(2000).decode("utf-8", errors="replace")
+        for name, value in (headers or {}).items():
+            if name.lower() in {"authorization", "x-api-key", "x-goog-api-key"}:
+                detail = detail.replace(value, "[REDACTED]")
+                detail = detail.replace(value.removeprefix("Bearer "), "[REDACTED]")
         raise RuntimeError(f"HTTP {exc.code} from provider: {detail}") from None
 
 
