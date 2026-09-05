@@ -302,6 +302,11 @@ def require_endpoint_canary(model: dict[str, Any]) -> dict[str, Any] | None:
     )
     if not probe["text"]:
         raise RuntimeError("endpoint inference canary returned no text")
+    if probe.get("resolved_model") != model["model_id"]:
+        raise RuntimeError(
+            f"endpoint inference returned model {probe.get('resolved_model')!r}, "
+            f"expected exact ID {model['model_id']!r}"
+        )
     return {
         "model_id": model["model_id"],
         "catalog": "passed",

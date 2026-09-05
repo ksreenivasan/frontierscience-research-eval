@@ -57,6 +57,21 @@ class ProviderTests(unittest.TestCase):
         )
         self.assertEqual(http_json.call_args_list[1].args[3]["max_tokens"], 32)
 
+        http_json.reset_mock()
+        http_json.side_effect = [
+            {"data": [{"id": "served-id"}]},
+            {
+                "model": "unexpected-alias",
+                "choices": [{"message": {"content": "OK"}}],
+                "usage": {},
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            key_file = Path(directory) / "key"
+            key_file.write_text("dummy-token")
+            with self.assertRaisesRegex(RuntimeError, "expected exact ID"):
+                require_endpoint_canary({**model, "key_file": str(key_file)})
+
 
 if __name__ == "__main__":
     unittest.main()
