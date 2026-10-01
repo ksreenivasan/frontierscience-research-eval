@@ -6,10 +6,12 @@ import datetime as dt
 import json
 import os
 import sys
+import threading
 import time
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .core import (
     DATASET_REVISION,
@@ -33,8 +35,33 @@ from .providers import (
 )
 
 
+_APPEND_LOCK = threading.Lock()
+
+
 def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def append_record(path: Path, record: dict[str, Any]) -> None:
+    with _APPEND_LOCK:
+        append_jsonl(path, record)
+
+
+def run_cells(cells: list[Any], function: Callable[[Any], int], workers: int) -> int:
+    """Apply `function` to each cell in order with up to `workers` threads; return failures."""
+    if workers < 1:
+        raise ValueError("workers must be positive")
+    if workers == 1:
+        return sum(function(cell) for cell in cells)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return sum(pool.map(function, cells))
+
+
+def parse_shard(value: str) -> tuple[int, int]:
+    index, _, count = value.partition("/")
+    if not (index.isdigit() and count.isdigit() and 0 <= int(index) < int(count)):
+        raise argparse.ArgumentTypeError("sample shard must look like INDEX/COUNT with 0 <= INDEX < COUNT")
+    return int(index), int(count)
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -137,6 +164,7 @@ def write_manifest(
     subset_name: str,
     subset: list[dict[str, Any]],
     trials: int,
+    sample_shard: str | None = None,
 ) -> None:
     manifest = {
         "condition_id": "frontierscience-research-direct-v0",
@@ -175,6 +203,8 @@ def write_manifest(
             "search_agent": False,
         },
     }
+    if sample_shard:
+        manifest["sample_shard"] = sample_shard
     manifest_path = run_dir / "manifest.json"
     subset_path = run_dir / "subset.jsonl"
     if manifest_path.exists():
@@ -237,6 +267,11 @@ def command_generate(args: argparse.Namespace) -> int:
     rows = load_dataset(args.data)
     validate_dataset(rows)
     subset = select_subset(rows, args.subset)
+    sample_shard = None
+    if args.sample_shard:
+        index, count = args.sample_shard
+        subset = subset[index::count]
+        sample_shard = f"{index}/{count}"
     trials = args.trials if args.trials is not None else int(config.get("trials", 1))
     if trials < 1:
         raise ValueError("trials must be positive")
@@ -246,7 +281,7 @@ def command_generate(args: argparse.Namespace) -> int:
         raise ValueError("research-full does not import answers from another run")
     run_dir = args.artifact_root / args.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    write_manifest(run_dir, config, args.subset, subset, trials)
+    write_manifest(run_dir, config, args.subset, subset, trials, sample_shard)
     answers_path = run_dir / "answers.jsonl"
     allowed = {
         (item["sample_id"], model["label"], trial)
@@ -261,7 +296,7 @@ def command_generate(args: argparse.Namespace) -> int:
         for row in read_jsonl(answers_path)
         if row.get("status") == "completed"
     }
-    failures = 0
+    pending = []
     for sample in subset:
         for model in config["models"]:
             for trial in range(trials):
@@ -269,70 +304,76 @@ def command_generate(args: argparse.Namespace) -> int:
                 if key in completed:
                     print(f"skip completed {model['label']} {sample['sample_id'][:12]} trial={trial}")
                     continue
-                started = time.monotonic()
-                print(f"generate {model['label']} {sample['sample_id'][:12]} trial={trial}", flush=True)
-                try:
-                    result = call_model(model, sample["problem"])
-                    elapsed = time.monotonic() - started
-                    raw_suffix = sha256_bytes(str(result.get("response_id") or utc_now()).encode())[:12]
-                    raw_path = run_dir / "raw" / (
-                        f"generation-{sample['sample_id'][:12]}-{model['label']}-t{trial:02d}-{raw_suffix}.json"
-                    )
-                    raw_path.parent.mkdir(parents=True, exist_ok=True)
-                    raw_path.write_text(json.dumps(result.pop("raw"), ensure_ascii=False, indent=2))
-                    finish_reason = str(result["finish_reason"]).lower()
-                    refusal = finish_reason == "refusal"
-                    incomplete = not result["text"] and finish_reason in {"max_tokens", "length"}
-                    if not result["text"] and not (refusal or incomplete):
-                        raise ValueError(
-                            "provider returned an empty visible answer "
-                            f"(finish_reason={result['finish_reason']}, usage={result['usage']})"
-                        )
-                    record = {
-                        "answer_id": sha256_bytes(
-                            "\0".join([sample["sample_id"], model["label"], str(trial)]).encode()
-                        ),
-                        "sample_id": sample["sample_id"],
-                        "task_group_id": sample["task_group_id"],
-                        "subject": sample["subject"],
-                        "stratum": sample["stratum"],
-                        "model_label": model["label"],
-                        "requested_model": model["model_id"],
-                        "resolved_model": result["resolved_model"],
-                        "resolved_provider": result["provider"],
-                        "effective_settings": effective_settings(model["provider"], model),
-                        "trial": trial,
-                        "answer": result["text"],
-                        "finish_reason": result["finish_reason"],
-                        "refusal": refusal,
-                        "incomplete": incomplete,
-                        "usage": result["usage"],
-                        "cost_usd": cost_usd(model, result["usage"]),
-                        "latency_seconds": round(elapsed, 3),
-                        "response_id": result["response_id"],
-                        "status": "completed",
-                        "created_at": utc_now(),
-                        "raw_path": str(raw_path.relative_to(run_dir)),
-                    }
-                    append_jsonl(answers_path, record)
-                    completed.add(key)
-                except Exception as exc:
-                    failures += 1
-                    append_jsonl(
-                        run_dir / "generation_errors.jsonl",
-                        {
-                            "sample_id": sample["sample_id"],
-                            "model_label": model["label"],
-                            "trial": trial,
-                            "error_type": type(exc).__name__,
-                            "error": str(exc)[:2000],
-                            "created_at": utc_now(),
-                        },
-                    )
-                    print(
-                        f"generation failed: {model['label']} trial={trial} ({type(exc).__name__})",
-                        file=sys.stderr,
-                    )
+                pending.append((sample, model, trial))
+
+    def generate_cell(cell: tuple[dict[str, Any], dict[str, Any], int]) -> int:
+        sample, model, trial = cell
+        started = time.monotonic()
+        print(f"generate {model['label']} {sample['sample_id'][:12]} trial={trial}", flush=True)
+        try:
+            result = call_model(model, sample["problem"])
+            elapsed = time.monotonic() - started
+            raw_suffix = sha256_bytes(str(result.get("response_id") or utc_now()).encode())[:12]
+            raw_path = run_dir / "raw" / (
+                f"generation-{sample['sample_id'][:12]}-{model['label']}-t{trial:02d}-{raw_suffix}.json"
+            )
+            raw_path.parent.mkdir(parents=True, exist_ok=True)
+            raw_path.write_text(json.dumps(result.pop("raw"), ensure_ascii=False, indent=2))
+            finish_reason = str(result["finish_reason"]).lower()
+            refusal = finish_reason == "refusal"
+            incomplete = not result["text"] and finish_reason in {"max_tokens", "length"}
+            if not result["text"] and not (refusal or incomplete):
+                raise ValueError(
+                    "provider returned an empty visible answer "
+                    f"(finish_reason={result['finish_reason']}, usage={result['usage']})"
+                )
+            record = {
+                "answer_id": sha256_bytes(
+                    "\0".join([sample["sample_id"], model["label"], str(trial)]).encode()
+                ),
+                "sample_id": sample["sample_id"],
+                "task_group_id": sample["task_group_id"],
+                "subject": sample["subject"],
+                "stratum": sample["stratum"],
+                "model_label": model["label"],
+                "requested_model": model["model_id"],
+                "resolved_model": result["resolved_model"],
+                "resolved_provider": result["provider"],
+                "effective_settings": effective_settings(model["provider"], model),
+                "trial": trial,
+                "answer": result["text"],
+                "finish_reason": result["finish_reason"],
+                "refusal": refusal,
+                "incomplete": incomplete,
+                "usage": result["usage"],
+                "cost_usd": cost_usd(model, result["usage"]),
+                "latency_seconds": round(elapsed, 3),
+                "response_id": result["response_id"],
+                "status": "completed",
+                "created_at": utc_now(),
+                "raw_path": str(raw_path.relative_to(run_dir)),
+            }
+            append_record(answers_path, record)
+            return 0
+        except Exception as exc:
+            append_record(
+                run_dir / "generation_errors.jsonl",
+                {
+                    "sample_id": sample["sample_id"],
+                    "model_label": model["label"],
+                    "trial": trial,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:2000],
+                    "created_at": utc_now(),
+                },
+            )
+            print(
+                f"generation failed: {model['label']} trial={trial} ({type(exc).__name__})",
+                file=sys.stderr,
+            )
+            return 1
+
+    failures = run_cells(pending, generate_cell, args.workers)
     return 1 if failures else 0
 
 
@@ -348,10 +389,13 @@ def command_grade(args: argparse.Namespace) -> int:
     answers = [row for row in read_jsonl(run_dir / "answers.jsonl") if row.get("status") == "completed"]
     judgments_path = run_dir / "judgments.jsonl"
     completed = {row["answer_id"] for row in read_jsonl(judgments_path) if row.get("status") == "completed"}
-    failures = 0
+    pending = []
     for answer in answers:
-        if answer["answer_id"] in completed:
-            continue
+        if answer["answer_id"] not in completed:
+            pending.append(answer)
+            completed.add(answer["answer_id"])
+
+    def grade_answer(answer: dict[str, Any]) -> int:
         sample = subset[answer["sample_id"]]
         prompt = RESEARCH_JUDGE_TEMPLATE.format(
             problem=sample["problem"], rubric=sample["rubric"], answer=answer["answer"]
@@ -366,7 +410,7 @@ def command_grade(args: argparse.Namespace) -> int:
             raw_path.parent.mkdir(parents=True, exist_ok=True)
             raw_path.write_text(json.dumps(result.pop("raw"), ensure_ascii=False, indent=2))
             score = parse_verdict(result["text"])
-            append_jsonl(
+            append_record(
                 judgments_path,
                 {
                     "answer_id": answer["answer_id"],
@@ -389,10 +433,9 @@ def command_grade(args: argparse.Namespace) -> int:
                     "raw_path": str(raw_path.relative_to(run_dir)),
                 },
             )
-            completed.add(answer["answer_id"])
+            return 0
         except Exception as exc:
-            failures += 1
-            append_jsonl(
+            append_record(
                 run_dir / "judge_errors.jsonl",
                 {
                     "answer_id": answer["answer_id"],
@@ -403,6 +446,9 @@ def command_grade(args: argparse.Namespace) -> int:
                 },
             )
             print(f"judge failed: {answer['model_label']} ({type(exc).__name__})", file=sys.stderr)
+            return 1
+
+    failures = run_cells(pending, grade_answer, args.workers)
     return 1 if failures else 0
 
 
@@ -578,6 +624,13 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--artifact-root", type=Path, default=Path(os.environ.get("FS_ARTIFACT_ROOT", "/work/artifacts")))
         command.add_argument("--run-id", required=True)
         command.set_defaults(func=func)
+        if name in {"generate", "grade"}:
+            command.add_argument(
+                "--workers",
+                type=int,
+                default=1,
+                help="concurrent provider requests (default 1: sequential)",
+            )
         if name == "generate":
             command.add_argument(
                 "--subset",
@@ -587,6 +640,11 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--trials", type=int)
             command.add_argument("--resume-from", type=Path)
             command.add_argument("--allow-full-run", action="store_true")
+            command.add_argument(
+                "--sample-shard",
+                type=parse_shard,
+                help="INDEX/COUNT: generate only every COUNT-th sample starting at INDEX",
+            )
         elif name == "grade":
             command.add_argument("--resume", action="store_true")
             command.add_argument("--allow-full-run", action="store_true")
