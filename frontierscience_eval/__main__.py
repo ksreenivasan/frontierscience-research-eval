@@ -49,12 +49,16 @@ def append_record(path: Path, record: dict[str, Any]) -> None:
 
 def run_cells(cells: list[Any], function: Callable[[Any], int], workers: int) -> int:
     """Apply `function` to each cell in order with up to `workers` threads; return failures."""
-    if workers < 1:
-        raise ValueError("workers must be positive")
     if workers == 1:
         return sum(function(cell) for cell in cells)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         return sum(pool.map(function, cells))
+
+
+def positive_int(value: str) -> int:
+    if not value.isdigit() or int(value) < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return int(value)
 
 
 def parse_shard(value: str) -> tuple[int, int]:
@@ -272,6 +276,8 @@ def command_generate(args: argparse.Namespace) -> int:
         index, count = args.sample_shard
         subset = subset[index::count]
         sample_shard = f"{index}/{count}"
+        if not subset:
+            raise ValueError(f"sample shard {sample_shard} selects no samples")
     trials = args.trials if args.trials is not None else int(config.get("trials", 1))
     if trials < 1:
         raise ValueError("trials must be positive")
@@ -305,6 +311,7 @@ def command_generate(args: argparse.Namespace) -> int:
                     print(f"skip completed {model['label']} {sample['sample_id'][:12]} trial={trial}")
                     continue
                 pending.append((sample, model, trial))
+                completed.add(key)
 
     def generate_cell(cell: tuple[dict[str, Any], dict[str, Any], int]) -> int:
         sample, model, trial = cell
@@ -541,6 +548,7 @@ def build_summary(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
         completeness["complete"]
         and manifest["subset"] == "research-full"
         and int(manifest["trial_count"]) == 30
+        and not manifest.get("sample_shard")
     )
     summary = {
         "label": (
@@ -627,7 +635,7 @@ def parser() -> argparse.ArgumentParser:
         if name in {"generate", "grade"}:
             command.add_argument(
                 "--workers",
-                type=int,
+                type=positive_int,
                 default=1,
                 help="concurrent provider requests (default 1: sequential)",
             )

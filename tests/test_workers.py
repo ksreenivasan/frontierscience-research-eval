@@ -89,19 +89,19 @@ class WorkerTests(unittest.TestCase):
     def tearDown(self):
         self.directory.cleanup()
 
-    def run_condition(self, run_id, workers, sample_shard=None):
+    def run_condition(self, run_id, workers, sample_shard=None, subset="research-pilot-v1", trials=3):
         fake = FakeProvider()
         with patch("frontierscience_eval.providers.http_json", fake), contextlib.redirect_stdout(io.StringIO()):
             generated = command_generate(
                 argparse.Namespace(
                     config=self.config_path,
                     data=Path("data/research-test.jsonl"),
-                    subset="research-pilot-v1",
+                    subset=subset,
                     artifact_root=self.root,
                     run_id=run_id,
-                    trials=3,
+                    trials=trials,
                     resume_from=None,
-                    allow_full_run=False,
+                    allow_full_run=True,
                     sample_shard=sample_shard,
                     workers=workers,
                 )
@@ -112,7 +112,7 @@ class WorkerTests(unittest.TestCase):
                     artifact_root=self.root,
                     run_id=run_id,
                     resume=True,
-                    allow_full_run=False,
+                    allow_full_run=True,
                     workers=workers,
                 )
             )
@@ -154,7 +154,15 @@ class WorkerTests(unittest.TestCase):
         self.assertNotIn("sample_shard", json.loads((self.root / "whole" / "manifest.json").read_text()))
         with self.assertRaises(argparse.ArgumentTypeError):
             parse_shard("2/2")
+        with self.assertRaisesRegex(ValueError, "selects no samples"):
+            self.run_condition("empty", workers=1, sample_shard=(9, 10))
 
+    def test_sharded_full_run_is_not_labelled_full_protocol(self):
+        self.run_condition("sharded-full", workers=8, sample_shard=(0, 60), subset="research-full", trials=30)
+        summary = build_summary(self.root / "sharded-full", json.loads(self.config_path.read_text()))
+        self.assertTrue(summary["completeness"]["complete"])
+        self.assertEqual(summary["completeness"]["expected_cells"], 30)
+        self.assertTrue(summary["label"].startswith("directional subset"))
 
 if __name__ == "__main__":
     unittest.main()
