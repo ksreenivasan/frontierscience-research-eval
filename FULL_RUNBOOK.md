@@ -204,7 +204,7 @@ docker run --rm --name frontierscience-eval-full-judge \
 
 Summarize offline with `--network none`. Commit only a sanitized report/manifest, never the run directory.
 
-The current implementation is deliberately sequential and append-only. Do not point multiple containers at the same writable JSONL directory. Parallel execution would require a separate, explicitly reviewed sharding/merge change rather than an ad hoc concurrent launch.
+The implementation is append-only and sequential by default. `--workers N` runs up to N requests concurrently inside one process, which owns the run directory and serializes its appends. Do not point multiple processes or containers at the same writable JSONL directory; to spread load across endpoints, give each process its own run ID and a disjoint `--sample-shard`.
 
 ## Scope, cost, runtime, and storage
 

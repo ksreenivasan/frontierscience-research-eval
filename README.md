@@ -80,6 +80,8 @@ To evaluate an arbitrary OpenAI-compatible or vLLM deployment, add a model entry
 
 Campaign jobs should use a one-model runtime config with an explicit trial count. Every deterministic `(sample_id, model_label, trial)` answer is appended immediately; completed keys are skipped and unresolved keys retried on resume. `request_timeout_seconds` bounds each provider call (default 1,800 seconds), and per-item exceptions are recorded without stopping later items. Summaries keep the full manifest cell count as the score denominator, show scored and unresolved counts separately, and remain incomplete while any generation or judgment is unresolved.
 
+`generate` and `grade` accept `--workers N` (default 1, sequential) to keep up to N provider requests in flight from one process. Request payloads, record formats, error records and resume semantics are the same as the sequential path; appends to the run's JSONL files are serialized. `generate --sample-shard INDEX/COUNT` keeps every COUNT-th sample starting at INDEX, so disjoint shards can run as separate run IDs (for example, one per endpoint replica); the shard is recorded in the manifest.
+
 ### Primary judge
 
 The primary adjudication condition is pinned to:

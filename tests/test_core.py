@@ -65,6 +65,8 @@ class CoreTests(unittest.TestCase):
                 trials=30,
                 resume_from=None,
                 allow_full_run=False,
+                sample_shard=None,
+                workers=1,
             )
             with self.assertRaisesRegex(ValueError, "explicit --allow-full-run"):
                 command_generate(args)
