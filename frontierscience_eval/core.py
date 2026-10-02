@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import math
 import re
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import Counter
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -171,12 +175,60 @@ def http_json(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.load(response)
     except urllib.error.HTTPError as exc:
-        detail = exc.read(2000).decode("utf-8", errors="replace")
-        for name, value in (headers or {}).items():
-            if name.lower() in {"authorization", "x-api-key", "x-goog-api-key"}:
-                detail = detail.replace(value, "[REDACTED]")
-                detail = detail.replace(value.removeprefix("Bearer "), "[REDACTED]")
-        raise RuntimeError(f"HTTP {exc.code} from provider: {detail}") from None
+        raise _provider_http_error(exc.code, exc.read(2000), headers) from None
+
+
+def _provider_http_error(code: int, body: bytes, headers: dict[str, str] | None) -> RuntimeError:
+    detail = body.decode("utf-8", errors="replace")
+    for name, value in (headers or {}).items():
+        if name.lower() in {"authorization", "x-api-key", "x-goog-api-key"}:
+            detail = detail.replace(value, "[REDACTED]")
+            detail = detail.replace(value.removeprefix("Bearer "), "[REDACTED]")
+    return RuntimeError(f"HTTP {code} from provider: {detail}")
+
+
+def http_sse(
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    timeout: int,
+) -> Iterator[dict[str, Any]]:
+    """POST `payload` and yield the JSON `data:` events of a server-sent-event stream.
+
+    `timeout` bounds the whole response, not each read: every read waits only for the
+    time left, and TimeoutError is raised once the deadline has passed.
+    """
+    deadline = time.monotonic() + timeout
+    parts = urllib.parse.urlsplit(url)
+    connection_class = (
+        http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
+    )
+    connection = connection_class(parts.netloc, timeout=timeout)
+    try:
+        path = parts.path + (f"?{parts.query}" if parts.query else "")
+        connection.request("POST", path, json.dumps(payload).encode(), headers)
+        # Keep the socket: getresponse() may drop the connection's reference to it.
+        sock = connection.sock
+        with connection.getresponse() as response:
+            if response.status != 200:
+                raise _provider_http_error(response.status, response.read(2000), headers)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"stream exceeded its {timeout} s deadline")
+                sock.settimeout(remaining)
+                line = response.readline()
+                if not line:
+                    return
+                line = line.strip()
+                if not line.startswith(b"data:"):
+                    continue
+                data = line.removeprefix(b"data:").strip()
+                if data == b"[DONE]":
+                    return
+                yield json.loads(data)
+    finally:
+        connection.close()
 
 
 def parse_verdict(text: str) -> float:
