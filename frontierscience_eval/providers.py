@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import contextlib
+import json
 from typing import Any
 
-from .core import http_json, read_key
+from .core import http_json, http_sse, read_key
+
+# continuous_usage_stats (vLLM) puts running token counts on every chunk, so a
+# response cut off by the timeout still records its usage.
+STREAM_OPTIONS = {"include_usage": True, "continuous_usage_stats": True}
 
 
 def _endpoint_base_url(model: dict[str, Any]) -> str:
@@ -130,8 +136,56 @@ def _openrouter_text(response: dict[str, Any]) -> str:
     return str(choices[0].get("message", {}).get("content", "")).strip() if choices else ""
 
 
-def call_model(model: dict[str, Any], prompt: str) -> dict[str, Any]:
+def _stream_chat_completion(
+    url: str, headers: dict[str, str], payload: dict[str, Any], timeout: int
+) -> dict[str, Any]:
+    """Stream a chat completion and assemble it in the non-streaming response shape.
+
+    Text received before a timeout is kept. `incomplete_reason` is "timeout",
+    "context_limit" or "max_tokens" when output stopped early, otherwise None.
+    """
+    parts: dict[str, list[str]] = {"content": [], "reasoning_content": [], "reasoning": []}
+    response: dict[str, Any] = {"object": "chat.completion"}
+    finish_reason = None
+    timed_out = False
+    try:
+        with contextlib.closing(http_sse(url, headers, payload, timeout)) as events:
+            for event in events:
+                if "error" in event or event.get("object") == "error":
+                    raise RuntimeError(f"stream error from provider: {json.dumps(event)[:2000]}")
+                for field in ("id", "model", "usage"):
+                    if event.get(field):
+                        response[field] = event[field]
+                for choice in event.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    for field, chunks in parts.items():
+                        if delta.get(field):
+                            chunks.append(delta[field])
+                    finish_reason = choice.get("finish_reason") or finish_reason
+    except TimeoutError:
+        timed_out = True
+    if finish_reason is None:
+        if not timed_out:
+            raise RuntimeError("stream ended without a finish_reason")
+        if not any("".join(chunks).strip() for chunks in parts.values()):
+            raise TimeoutError(f"stream timed out after {timeout} s with no output")
+        reason = "timeout"
+    elif finish_reason == "length":
+        cap = payload.get("max_tokens")
+        used = (response.get("usage") or {}).get("completion_tokens")
+        reason = "context_limit" if cap is None or (used is not None and used < cap) else "max_tokens"
+    else:
+        reason = None
+    message = {"role": "assistant", **{field: "".join(chunks) or None for field, chunks in parts.items()}}
+    response["choices"] = [{"index": 0, "message": message, "finish_reason": finish_reason}]
+    response["incomplete_reason"] = reason
+    return response
+
+
+def call_model(model: dict[str, Any], prompt: str, streaming: bool = False) -> dict[str, Any]:
     provider = model["provider"]
+    if streaming and provider != "openai_compatible":
+        raise ValueError(f"streaming supports only openai_compatible models, not {provider}")
     key = read_key(model["key_file"])
     payload = build_payload(provider, model, prompt)
     timeout = int(model.get("request_timeout_seconds", 1800))
@@ -212,7 +266,11 @@ def call_model(model: dict[str, Any], prompt: str) -> dict[str, Any]:
             if provider == "openrouter"
             else f"{_endpoint_base_url(model)}/chat/completions"
         )
-        response = http_json(url, "POST", headers, payload, timeout=timeout)
+        if streaming:
+            stream_payload = {**payload, "stream": True, "stream_options": STREAM_OPTIONS}
+            response = _stream_chat_completion(url, headers, stream_payload, timeout)
+        else:
+            response = http_json(url, "POST", headers, payload, timeout=timeout)
         usage = response.get("usage", {})
         details = usage.get("completion_tokens_details", {}) or {}
         choices = response.get("choices", [])
@@ -223,7 +281,7 @@ def call_model(model: dict[str, Any], prompt: str) -> dict[str, Any]:
             or message.get("reasoning")
             or ""
         ).strip()
-        return {
+        result = {
             "text": text,
             "resolved_model": response.get("model"),
             "provider": (
@@ -240,6 +298,9 @@ def call_model(model: dict[str, Any], prompt: str) -> dict[str, Any]:
             "response_id": response.get("id"),
             "raw": response,
         }
+        if streaming:
+            result["incomplete_reason"] = response["incomplete_reason"]
+        return result
     raise ValueError(f"unsupported provider: {provider}")
 
 

@@ -82,6 +82,8 @@ Campaign jobs should use a one-model runtime config with an explicit trial count
 
 `generate` and `grade` accept `--workers N` (default 1, sequential) to keep up to N provider requests in flight from one process. Request payloads, record formats, error records and resume semantics are the same as the sequential path; appends to the run's JSONL files are serialized. `generate --sample-shard INDEX/COUNT` keeps every COUNT-th sample starting at INDEX, so disjoint shards can run as separate run IDs (for example, one per endpoint replica); the shard is recorded in the manifest.
 
+`generate --streaming` (off by default; `openai_compatible` models only) requests streamed responses and assembles them into the usual answer record. `request_timeout_seconds` then bounds the whole response, not only the wait for it. When the timeout cuts a response off, or it stops with finish reason `length`, the text received so far is kept as a completed record with `incomplete: true` and `incomplete_reason` set to `timeout`, `context_limit` or `max_tokens` (the requested cap was reached). These records are graded and are not retried on resume. A timeout before any output arrives is still a generation error. Token usage is read from the stream: the request asks for per-chunk usage (`stream_options.continuous_usage_stats`, a vLLM extension), so cut-off answers keep their token counts. Streamed requests connect directly to `base_url` (proxy environment variables are not used). Streamed records carry `streaming: true`, and the manifest records the flag, so a run cannot be resumed with the flag toggled. Without the flag, requests and records are unchanged.
+
 ### Primary judge
 
 The primary adjudication condition is pinned to:

@@ -169,6 +169,7 @@ def write_manifest(
     subset: list[dict[str, Any]],
     trials: int,
     sample_shard: str | None = None,
+    streaming: bool = False,
 ) -> None:
     manifest = {
         "condition_id": "frontierscience-research-direct-v0",
@@ -209,6 +210,8 @@ def write_manifest(
     }
     if sample_shard:
         manifest["sample_shard"] = sample_shard
+    if streaming:
+        manifest["streaming"] = True
     manifest_path = run_dir / "manifest.json"
     subset_path = run_dir / "subset.jsonl"
     if manifest_path.exists():
@@ -248,14 +251,21 @@ def validate_config_against_manifest(config: dict[str, Any], manifest: dict[str,
         raise ValueError("config does not match the run manifest")
 
 
-def import_answers(source: Path, destination: Path, allowed: set[tuple[str, str, int]]) -> None:
+def import_answers(
+    source: Path, destination: Path, allowed: set[tuple[str, str, int]], streaming: bool = False
+) -> None:
     existing = {
         (row["sample_id"], row["model_label"], int(row.get("trial", 0)))
         for row in read_jsonl(destination)
     }
     for row in read_jsonl(source / "answers.jsonl"):
         key = (row.get("sample_id"), row.get("model_label"), int(row.get("trial", 0)))
-        if key in allowed and key not in existing and row.get("status") == "completed":
+        if (
+            key in allowed
+            and key not in existing
+            and row.get("status") == "completed"
+            and bool(row.get("streaming")) == streaming
+        ):
             copied = dict(row)
             copied["imported_from"] = str(source)
             append_jsonl(destination, copied)
@@ -264,6 +274,9 @@ def import_answers(source: Path, destination: Path, allowed: set[tuple[str, str,
 
 def command_generate(args: argparse.Namespace) -> int:
     config = load_config(args.config)
+    streaming = getattr(args, "streaming", False)
+    if streaming and any(model["provider"] != "openai_compatible" for model in config["models"]):
+        raise ValueError("--streaming supports only openai_compatible models")
     for model in config["models"]:
         canary = require_endpoint_canary(model)
         if canary:
@@ -287,7 +300,7 @@ def command_generate(args: argparse.Namespace) -> int:
         raise ValueError("research-full does not import answers from another run")
     run_dir = args.artifact_root / args.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    write_manifest(run_dir, config, args.subset, subset, trials, sample_shard)
+    write_manifest(run_dir, config, args.subset, subset, trials, sample_shard, streaming)
     answers_path = run_dir / "answers.jsonl"
     allowed = {
         (item["sample_id"], model["label"], trial)
@@ -296,7 +309,7 @@ def command_generate(args: argparse.Namespace) -> int:
         for trial in range(trials)
     }
     if args.resume_from:
-        import_answers(args.resume_from, answers_path, allowed)
+        import_answers(args.resume_from, answers_path, allowed, streaming)
     completed = {
         (row["sample_id"], row["model_label"], int(row.get("trial", 0)))
         for row in read_jsonl(answers_path)
@@ -318,7 +331,7 @@ def command_generate(args: argparse.Namespace) -> int:
         started = time.monotonic()
         print(f"generate {model['label']} {sample['sample_id'][:12]} trial={trial}", flush=True)
         try:
-            result = call_model(model, sample["problem"])
+            result = call_model(model, sample["problem"], streaming=streaming)
             elapsed = time.monotonic() - started
             raw_suffix = sha256_bytes(str(result.get("response_id") or utc_now()).encode())[:12]
             raw_path = run_dir / "raw" / (
@@ -328,7 +341,9 @@ def command_generate(args: argparse.Namespace) -> int:
             raw_path.write_text(json.dumps(result.pop("raw"), ensure_ascii=False, indent=2))
             finish_reason = str(result["finish_reason"]).lower()
             refusal = finish_reason == "refusal"
-            incomplete = not result["text"] and finish_reason in {"max_tokens", "length"}
+            incomplete = (
+                not result["text"] and finish_reason in {"max_tokens", "length"}
+            ) or bool(result.get("incomplete_reason"))
             if not result["text"] and not (refusal or incomplete):
                 raise ValueError(
                     "provider returned an empty visible answer "
@@ -360,6 +375,9 @@ def command_generate(args: argparse.Namespace) -> int:
                 "created_at": utc_now(),
                 "raw_path": str(raw_path.relative_to(run_dir)),
             }
+            if streaming:
+                record["streaming"] = True
+                record["incomplete_reason"] = result["incomplete_reason"]
             append_record(answers_path, record)
             return 0
         except Exception as exc:
@@ -652,6 +670,14 @@ def parser() -> argparse.ArgumentParser:
                 "--sample-shard",
                 type=parse_shard,
                 help="INDEX/COUNT: generate only every COUNT-th sample starting at INDEX",
+            )
+            command.add_argument(
+                "--streaming",
+                action="store_true",
+                help=(
+                    "stream model responses (openai_compatible only); a timeout or length stop "
+                    "keeps the partial answer as a record marked incomplete with its reason"
+                ),
             )
         elif name == "grade":
             command.add_argument("--resume", action="store_true")
